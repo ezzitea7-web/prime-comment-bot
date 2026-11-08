@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 DATABASE = os.getenv("BOT_DB", "bot.sqlite3")
 DAY = 86400
 
-PRIVACY_POLICY = "PRIME COMMENT BOT\nPrivacy Policy and Data Deletion\nEffective: 8 November 2026\n\nWho runs the bot\nPrime Comment Bot is operated by Bedisciplined for its Instagram account @primedijitalstudio. Contact: https://t.me/BedisciplinedSupport\n\nWhat the bot processes and why\nMeta sends the bot information about Instagram comments, which may include the commenter’s account identifier, username, comment text, comment identifier, and post identifier. The bot checks whether the comment is on a configured post and contains the keyword advertised in the post. If it matches, the bot uses the comment identifier to send the requested product link by Instagram direct message and may post a public reply confirming that the message was sent. The bot also uses the comment identifier and delivery status to retry eligible requests and avoid duplicate replies.\n\nStorage and retention\nThe bot does not write the commenter’s username, account identifier, or comment text to its queue. For matching comments, the queue stores the comment identifier, the business account identifier, the prepared response, timestamps, and delivery status. Queue records expire seven days after the event timestamp and are removed by the bot when it is running. Railway hosts the bot and its database. Meta processes the original comments and the replies under its own policies. This page covers the bot, and any linked storefront has its own privacy practices.\n\nData access and deletion\nAnyone whose comment was processed can request access to or deletion of their bot data. Contact https://t.me/BedisciplinedSupport with the Instagram username you used and a link to the post or comment, plus the approximate time of the comment if known. We may ask for enough information to verify the request and locate the record. Please do not send your password. A request to Bedisciplined concerns data held by the bot. You can manage the original comment or message through Instagram."
+PRIVACY_POLICY = "PRIME COMMENT BOT\nPrivacy Policy and Data Deletion\nEffective: 8 November 2026\n\nWho runs the bot\nPrime Comment Bot is operated by Bedisciplined for its Instagram account @primedijitalstudio. Contact: https://t.me/BedisciplinedSupport\n\nWhat the bot processes and why\nMeta sends the bot information about Instagram comments, which may include the commenter’s account identifier, username, comment text, comment identifier, and post identifier. The bot checks whether the comment is on a configured post. Campaigns may accept any comment on that post or require a keyword. If it matches, the bot uses the comment identifier to send the requested product link by Instagram direct message and may post a public reply confirming that the message was sent. The bot also uses the comment identifier and delivery status to retry eligible requests and avoid duplicate replies.\n\nStorage and retention\nThe bot does not write the commenter’s username, account identifier, or comment text to its queue. For matching comments, the queue stores the comment identifier, the business account identifier, the prepared response, timestamps, and delivery status. Queue records expire seven days after the event timestamp and are removed by the bot when it is running. Railway hosts the bot and its database. Meta processes the original comments and the replies under its own policies. This page covers the bot, and any linked storefront has its own privacy practices.\n\nData access and deletion\nAnyone whose comment was processed can request access to or deletion of their bot data. Contact https://t.me/BedisciplinedSupport with the Instagram username you used and a link to the post or comment, plus the approximate time of the comment if known. We may ask for enough information to verify the request and locate the record. Please do not send your password. A request to Bedisciplined concerns data held by the bot. You can manage the original comment or message through Instagram."
 
 def database():
     return closing(sqlite3.connect(DATABASE, timeout=15))
@@ -57,7 +57,8 @@ def enqueue(event, account, campaigns):
                     continue
                 words = set(re.findall(r"\w+", str(value.get("text", "")).casefold()))
                 for campaign in campaigns:
-                    if media != campaign["media_id"] or campaign["keyword"].casefold() not in words:
+                    keyword = campaign.get("keyword")
+                    if media != campaign["media_id"] or (keyword is not None and keyword.casefold() not in words):
                         continue
                     template = json.dumps(dm_template(campaign)) if "button_title" in campaign else None
                     text = campaign["dm"] if template else campaign["dm"] + "\n" + campaign["url"]
@@ -186,7 +187,9 @@ if __name__ == "__main__":
         campaigns = json.load(file)
     for campaign in campaigns:
         url = urlsplit(campaign["url"])
-        if (not campaign["media_id"].isdigit() or not re.fullmatch(r"\w+", campaign["keyword"])
+        keyword = campaign.get("keyword")
+        if (not campaign["media_id"].isdigit()
+                or (keyword is not None and not re.fullmatch(r"\w+", keyword))
                 or url.scheme != "https" or not url.hostname or not campaign["dm"].strip()
                 or not campaign["reply"].strip()):
             raise SystemExit("Invalid campaign configuration")
