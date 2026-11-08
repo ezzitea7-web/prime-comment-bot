@@ -7,15 +7,16 @@ import sqlite3
 import threading
 import time
 from contextlib import closing
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 DATABASE = os.getenv("BOT_DB", "bot.sqlite3")
 DAY = 86400
 
-PRIVACY_POLICY = "PRIME COMMENT BOT\nPrivacy Policy and Data Deletion\nEffective: 8 November 2026\n\nWho runs the bot\nPrime Comment Bot is operated by Bedisciplined for its Instagram account @primedijitalstudio. Contact: https://t.me/BedisciplinedSupport\n\nWhat the bot processes and why\nMeta sends the bot information about Instagram comments, which may include the commenter’s account identifier, username, comment text, comment identifier, and post identifier. The bot checks whether the comment is on a configured post. Campaigns may accept any comment on that post or require a keyword. If it matches, the bot uses the comment identifier to send the requested product link by Instagram direct message and may post a public reply confirming that the message was sent. The bot also uses the comment identifier and delivery status to retry eligible requests and avoid duplicate replies.\n\nStorage and retention\nThe bot does not write the commenter’s username, account identifier, or comment text to its queue. For matching comments, the queue stores the comment identifier, the business account identifier, the prepared response, timestamps, and delivery status. Queue records expire seven days after the event timestamp and are removed by the bot when it is running. Railway hosts the bot and its database. Meta processes the original comments and the replies under its own policies. This page covers the bot, and any linked storefront has its own privacy practices.\n\nData access and deletion\nAnyone whose comment was processed can request access to or deletion of their bot data. Contact https://t.me/BedisciplinedSupport with the Instagram username you used and a link to the post or comment, plus the approximate time of the comment if known. We may ask for enough information to verify the request and locate the record. Please do not send your password. A request to Bedisciplined concerns data held by the bot. You can manage the original comment or message through Instagram."
+PRIVACY_POLICY = "PRIME COMMENT BOT\nPrivacy Policy and Data Deletion\nEffective: 8 November 2026\n\nWho runs the bot\nPrime Comment Bot is operated by Bedisciplined for its Instagram account @primedijitalstudio. Contact: https://t.me/BedisciplinedSupport\n\nWhat the bot processes and why\nThe bot receives or periodically retrieves information about Instagram comments from Meta, which may include the commenter’s account identifier, username, comment text, comment identifier, and post identifier. The bot checks whether the comment is on a configured post. Campaigns may accept any comment on that post or require a keyword. If it matches, the bot uses the comment identifier to send the requested product link by Instagram direct message and may post a public reply confirming that the message was sent. The bot also uses the comment identifier and delivery status to retry eligible requests and avoid duplicate replies.\n\nStorage and retention\nThe bot does not write the commenter’s username, account identifier, or comment text to its queue. For matching comments, the queue stores the comment identifier, the business account identifier, the prepared response, timestamps, and delivery status. Queue records expire seven days after the event timestamp and are removed by the bot when it is running. Railway hosts the bot and its database. Meta processes the original comments and the replies under its own policies. This page covers the bot, and any linked storefront has its own privacy practices.\n\nData access and deletion\nAnyone whose comment was processed can request access to or deletion of their bot data. Contact https://t.me/BedisciplinedSupport with the Instagram username you used and a link to the post or comment, plus the approximate time of the comment if known. We may ask for enough information to verify the request and locate the record. Please do not send your password. A request to Bedisciplined concerns data held by the bot. You can manage the original comment or message through Instagram."
 
 def database():
     return closing(sqlite3.connect(DATABASE, timeout=15))
@@ -27,6 +28,8 @@ def init():
             reply TEXT NOT NULL, stage TEXT NOT NULL DEFAULT 'dm',
             due REAL NOT NULL, expires REAL NOT NULL, attempts INTEGER DEFAULT 0)""")
         db.execute("CREATE INDEX IF NOT EXISTS due_jobs ON jobs(stage, due)")
+        db.execute("""CREATE TABLE IF NOT EXISTS comment_poll_state (
+            media_id TEXT PRIMARY KEY, starts_at REAL NOT NULL, watermark REAL NOT NULL)""")
         columns = {column[1] for column in db.execute("PRAGMA table_info(jobs)")}
         if "dm_template" not in columns:
             db.execute("ALTER TABLE jobs ADD COLUMN dm_template TEXT")
@@ -57,6 +60,8 @@ def enqueue(event, account, campaigns):
                     continue
                 words = set(re.findall(r"\w+", str(value.get("text", "")).casefold()))
                 for campaign in campaigns:
+                    if campaign.get("poll_username") and author.get("username", "").casefold() == campaign["poll_username"].casefold():
+                        continue
                     keyword = campaign.get("keyword")
                     if media != campaign["media_id"] or (keyword is not None and keyword.casefold() not in words):
                         continue
@@ -67,16 +72,77 @@ def enqueue(event, account, campaigns):
                         min(float(entry.get("time", now)), now) + 7 * DAY, template))
                     break
 
-def graph(path, body):
+def graph(path, body=None):
     version = os.environ["IG_API_VERSION"]
     login_mode = os.getenv("IG_LOGIN_MODE", "instagram")
     host = "graph.facebook.com" if login_mode == "facebook" else "graph.instagram.com"
     request = Request(f"https://{host}/{version}/{path}",
-                      data=json.dumps(body).encode(),
+                      data=json.dumps(body).encode() if body is not None else None,
                       headers={"Authorization": "Bearer " + os.environ["IG_TOKEN"],
-                               "Content-Type": "application/json"}, method="POST")
+                               "Content-Type": "application/json"}, method="POST" if body is not None else "GET")
     with urlopen(request, timeout=20) as response:
-        response.read()
+        return json.load(response)
+
+def poll_comments(account, campaign, own_username):
+    media = campaign["media_id"]
+    with database() as db, db:
+        now = time.time()
+        db.execute("INSERT OR IGNORE INTO comment_poll_state VALUES (?,?,?)", (media, now, now))
+        starts_at, watermark = db.execute(
+            "SELECT starts_at,watermark FROM comment_poll_state WHERE media_id=?", (media,)
+        ).fetchone()
+    cutoff = max(starts_at, watermark - 120, now - 7 * DAY)
+    parameters = {"fields": "id,text,timestamp,from{id,username}", "limit": 50}
+    comments = []
+    next_watermark = watermark
+    cursors = set()
+    while True:
+        response = graph(media + "/comments?" + urlencode(parameters))
+        batch = response["data"]
+        for comment in batch:
+            created = datetime.fromisoformat(comment["timestamp"]).timestamp()
+            if created < cutoff:
+                continue
+            next_watermark = max(next_watermark, min(created, now))
+            author = comment.get("from") or {}
+            if author.get("username", "").casefold() == own_username:
+                continue
+            comments.append((created, {
+                "field": "comments",
+                "value": {**comment, "media": {"id": media}},
+            }))
+        paging = response.get("paging") or {}
+        cursor = (paging.get("cursors") or {}).get("after")
+        if not paging.get("next") or not cursor:
+            break
+        if cursor in cursors:
+            raise ValueError("Repeated comment cursor")
+        cursors.add(cursor)
+        parameters["after"] = cursor
+    for created, change in sorted(comments, key=lambda item: item[0]):
+        enqueue({"object": "instagram", "entry": [{
+            "id": account, "time": created, "changes": [change],
+        }]}, account, [campaign])
+    with database() as db, db:
+        db.execute("UPDATE comment_poll_state SET watermark=? WHERE media_id=?", (next_watermark, media))
+
+def poll_worker(account, campaigns):
+    ready = set()
+    while True:
+        for campaign in campaigns:
+            if not campaign.get("poll_username"):
+                continue
+            try:
+                poll_comments(account, campaign, campaign["poll_username"].casefold())
+                if campaign["media_id"] not in ready:
+                    ready.add(campaign["media_id"])
+                    print("Comment polling ready for configured Reel", flush=True)
+            except HTTPError as error:
+                print("Comment polling HTTP error:", error.code, flush=True)
+                error.close()
+            except Exception as error:
+                print("Comment polling error:", type(error).__name__, flush=True)
+        time.sleep(30)
 
 def work():
     while True:
@@ -199,4 +265,6 @@ if __name__ == "__main__":
     server = ThreadingHTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Handler)
     server.campaigns = campaigns
     threading.Thread(target=work, daemon=True).start()
+    if any(campaign.get("poll_username") for campaign in campaigns):
+        threading.Thread(target=poll_worker, args=(os.environ["IG_ACCOUNT_ID"], campaigns), daemon=True).start()
     server.serve_forever()
