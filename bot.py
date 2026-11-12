@@ -175,7 +175,13 @@ def process_one():
         except HTTPError as error:
             payload = error.read()
             try:
-                code = json.loads(payload).get("error", {}).get("code")
+                details = json.loads(payload).get("error", {})
+                code = details.get("code")
+                message = str(details.get("message", ""))
+                message = message.replace(os.environ["IG_TOKEN"], "[redacted]")
+                message = re.sub(r"EAA[A-Za-z0-9_|-]+", "[redacted]", message)
+                print("Meta error details:", stage, error.code, code,
+                      details.get("error_subcode"), message[:800], flush=True)
             except (ValueError, AttributeError):
                 code = None
             retry = (error.code == 429 or code in {4, 17, 32, 613}) and attempts < 12
