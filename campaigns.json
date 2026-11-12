@@ -3,7 +3,9 @@
     "media_id": "18180388762391586",
     "url": "https://bedisciplined.shop",
     "button_title": "Habit Tracker 🎯",
-    "dm": "Most people want better habits. Almost nobody tracks them.\n\nThis Habit Tracker is built to:\n\n- Remove guesswork\n- Make progress visible\n- Force daily accountability\n\nWhen habits are measurable, consistency becomes automatic.\n\nGet your Habit Tracker 🎯 here:\nhttps://bedisciplined.shop\n\nOr click the button below 👇",
+    "template_type": "generic",
+    "card_title": "Your Habit Tracker 🎯",
+    "dm": "Build better habits. Tap below to get your tracker.",
     "reply": "Just sent you the link! Check your DMs 📩",
     "poll_username": "primedijitalstudio"
   }
