@@ -147,7 +147,7 @@ def poll_worker(account, campaigns):
                 error.close()
             except Exception as error:
                 print("Comment polling error:", type(error).__name__, flush=True)
-        time.sleep(30)
+        time.sleep(10)
 
 def work():
     while True:
@@ -155,7 +155,7 @@ def work():
             process_one()
         except Exception as error:
             print("Worker error:", type(error).__name__, flush=True)
-        time.sleep(6)
+        time.sleep(1)
 
 def process_one():
     with database() as db:
