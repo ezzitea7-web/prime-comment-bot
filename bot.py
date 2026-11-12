@@ -35,11 +35,16 @@ def init():
             db.execute("ALTER TABLE jobs ADD COLUMN dm_template TEXT")
 
 def dm_template(campaign):
-    return {"attachment": {"type": "template", "payload": {
-        "template_type": "button",
-        "text": campaign["dm"],
-        "buttons": [{"type": "web_url", "title": campaign["button_title"], "url": campaign["url"]}],
-    }}}
+    buttons = [{"type": "web_url", "title": campaign["button_title"], "url": campaign["url"]}]
+    if campaign.get("template_type") == "generic":
+        payload = {"template_type": "generic", "elements": [{
+            "title": campaign["card_title"],
+            "subtitle": campaign["dm"],
+            "buttons": buttons,
+        }]}
+    else:
+        payload = {"template_type": "button", "text": campaign["dm"], "buttons": buttons}
+    return {"attachment": {"type": "template", "payload": payload}}
 
 def enqueue(event, account, campaigns):
     if event.get("object") != "instagram":
